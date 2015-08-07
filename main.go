@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-var watcher inotify.Watcher
+var watcher fsnotify.Watcher
 
 var buildCmd, appCmd *exec.Cmd = nil, nil
 
@@ -69,49 +69,39 @@ func main() {
 	go func() {
 		for {
 			select {
-			case event := <-watcher.Events:
-				log.Println("event:", event)
-				if event.Op&fsnotify.Write == fsnotify.Write {
-					log.Println("modified file:", event.Name)
+			case ev := <-watcher.Events:
+
+				if matches, _ := filepath.Match(filePattern, filepath.Base(ev.Name));
+				ev.Op & (fsnotify.Create | fsnotify.Write) != 0 &&
+				matches {
+					log.Printf("file: %v had event: %v\n", ev.Name, ev)
+					select {
+					case changeMsgs <- "file modified":
+						fmt.Println("sent message")
+					default:
+						fmt.Println("no message sent")
+					}
 				}
 			case err := <-watcher.Errors:
 				log.Println("error:", err)
 			}
-//			select {
-//			case ev := <-watcher.Event:
-//				if matches, _ := filepath.Match(filePattern, filepath.Base(ev.Name));
-//				//                ev.Mask & inotify.IN_OPEN != 0 &&
-//				ev.Mask & (inotify.IN_MODIFY | inotify.IN_CREATE |
-//				inotify.IN_CLOSE_WRITE | inotify.IN_MOVED_TO) != 0 &&
-//				matches {
-//					log.Printf("file: %v had event: %v\n", ev.Name, ev)
-//					select {
-//					case changeMsgs <- "file modified":
-//						fmt.Println("sent message")
-//					default:
-//						fmt.Println("no message sent")
-//					}
-//				}
-//			case err := <-watcher.Error:
-//				log.Println("error:", err)
-//			}
 		}
 	}()
 
 
 	filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
-		fmt.Printf("File path: %v\n", path)
-		if matches, _ := filepath.Match(".git", filepath.Base(path)); !matches {
-			fmt.Printf("File Base: %v\n", filepath.Base(path))
+//		fmt.Printf("File path: %v\n", path)
+		if !(strings.HasPrefix(filepath.Base(path), ".") && path != ".") {
+//			fmt.Printf("File Base: %v\n", filepath.Base(path))
 			if info.IsDir() {
-				fmt.Printf("Watching file: ./%v  basename: %v \n", path, info.Name)
+				fmt.Printf("Watching file: ./%v\n", path)
 				addErr := watcher.Add(path)
 				if addErr != nil {
 					log.Printf("Error while adding: %v\n", addErr)
 				}
 			}
 		} else {
-			fmt.Println("Skipping directory")
+			fmt.Println("Skipping directory ", path)
 			if info.IsDir() {
 				return filepath.SkipDir
 			}
