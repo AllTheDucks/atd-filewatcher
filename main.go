@@ -1,21 +1,23 @@
 package main
 
 import (
-	"fmt"
 	"bufio"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
-	"github.com/go-fsnotify/fsnotify"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
+
+	"github.com/go-fsnotify/fsnotify"
 )
 
 var watcher fsnotify.Watcher
 
 var buildCmd, appCmd *exec.Cmd = nil, nil
-
 
 func main() {
 	var buildCmdArg, runCmdArg, filePattern string
@@ -26,12 +28,12 @@ func main() {
 	flag.Parse()
 
 	if buildCmdArg == "" || runCmdArg == "" {
-		flag.PrintDefaults();
+		flag.PrintDefaults()
 		os.Exit(1)
 	}
 
 	tokens := strings.Split(buildCmdArg, " ")
-	if (len(tokens) < 1) {
+	if len(tokens) < 1 {
 		fmt.Errorf("not enough arguments in build command")
 		os.Exit(1)
 	}
@@ -42,7 +44,7 @@ func main() {
 	}
 
 	tokens = strings.Split(runCmdArg, " ")
-	if (len(tokens) < 1) {
+	if len(tokens) < 1 {
 		fmt.Errorf("not enough arguments in build command")
 		os.Exit(1)
 	}
@@ -52,11 +54,11 @@ func main() {
 		appCmdArgs = tokens[1:]
 	}
 
-
-
-
 	changeMsgs := make(chan string, 5)
 	done := make(chan bool)
+	sigs := make(chan os.Signal, 1)
+
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -71,9 +73,8 @@ func main() {
 			select {
 			case ev := <-watcher.Events:
 
-				if matches, _ := filepath.Match(filePattern, filepath.Base(ev.Name));
-				ev.Op & (fsnotify.Create | fsnotify.Write) != 0 &&
-				matches {
+				if matches, _ := filepath.Match(filePattern, filepath.Base(ev.Name)); ev.Op&(fsnotify.Create|fsnotify.Write) != 0 &&
+					matches {
 					log.Printf("file: %v had event: %v\n", ev.Name, ev)
 					select {
 					case changeMsgs <- "file modified":
@@ -88,11 +89,10 @@ func main() {
 		}
 	}()
 
-
 	filepath.Walk(".", func(path string, info os.FileInfo, err error) error {
-//		fmt.Printf("File path: %v\n", path)
+		//		fmt.Printf("File path: %v\n", path)
 		if !(strings.HasPrefix(filepath.Base(path), ".") && path != ".") {
-//			fmt.Printf("File Base: %v\n", filepath.Base(path))
+			//			fmt.Printf("File Base: %v\n", filepath.Base(path))
 			if info.IsDir() {
 				fmt.Printf("Watching file: ./%v\n", path)
 				addErr := watcher.Add(path)
@@ -112,21 +112,11 @@ func main() {
 	fmt.Println(len(os.Args), os.Args)
 	go func() {
 
-
 		for {
 			//TODO need to empty the channel each time
 			log.Printf("Listening for change messages.")
 			<-changeMsgs
-			if appCmd != nil {
-				log.Println("Attempting to kill app...")
-				err := appCmd.Process.Kill()
-				if err != nil {
-					log.Fatal(err)
-				}
-				log.Println("Waiting for app to exit...")
-				appCmd.Wait()
-				log.Println("App exited.")
-			}
+			killApp()
 
 			log.Println("Building App.")
 			buildCmd = executeCmd(buildCmdName, buildCmdArgs...)
@@ -144,13 +134,17 @@ func main() {
 		}
 	}()
 
+	go func() {
+		sig := <-sigs
+		fmt.Println(sig)
+		killApp()
+		done <- true
+	}()
 
 	changeMsgs <- "start process"
 	<-done
 
 }
-
-
 
 func executeCmd(name string, args ...string) (cmd *exec.Cmd) {
 	cmd = exec.Command(name, args...)
@@ -196,3 +190,15 @@ func executeCmd(name string, args ...string) (cmd *exec.Cmd) {
 
 }
 
+func killApp() {
+	if appCmd != nil {
+		log.Println("Attempting to kill app...")
+		err := appCmd.Process.Kill()
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Println("Waiting for app to exit...")
+		appCmd.Wait()
+		log.Println("App exited.")
+	}
+}
